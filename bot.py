@@ -12,28 +12,29 @@ from telegram.ext import (
     filters,
 )
 
-# Archivo de datos (usa un Volume montado en /data en Railway)
-DATA_FILE = "/data/data.json"
+# ---------------- CONFIGURACIÓN ----------------
+
+DATA_FILE = "/data/data.json"  # Volume montado en Railway
 MAX_LINES = 100
 
-# Enlace del botón final
 INDEX_URL = "https://t.me/cinehdcastellano2/2/2840"
 
-# Detecta cualquier enlace válido de pixeldrain (archivos o listas)
+# SOLO ESTE USUARIO PUEDE USAR LOS COMANDOS (TU ID)
+OWNER_ID = 5540195020
+
+# Detectar URLs de pixeldrain (archivos y listas)
 PIXEL_URL_RE = re.compile(
     r"https?://pixeldrain\.net/(?:u|l)/[^\s)]+",
     re.IGNORECASE,
 )
 
 
+# ---------------- UTILIDADES ----------------
+
 def normalize(s: str) -> str:
-    """
-    Normaliza una cadena para orden alfabético “humano”:
-    - Elimina acentos (Á -> A, É -> E, etc.)
-    - Pasa a minúsculas
-    """
+    \"\"\"Normaliza texto para orden alfabético (quita acentos y pasa a minúsculas).\"\"\"
     nf = unicodedata.normalize("NFD", s)
-    sin_acentos = "".join(c for c in nf if unicodedata.category(c) != "Mn")
+    sin_acentos = \"\".join(c for c in nf if unicodedata.category(c) != "Mn")
     return sin_acentos.lower()
 
 
@@ -58,18 +59,26 @@ def split_blocks(entries):
 
 
 def fmt_block(block):
-    """
-    Devuelve el texto del bloque:
-    Cada línea es el título completo en azul y clicable,
-    con el enlace de pixeldrain oculto.
-    """
-    return "\n".join(f'<a href="{e["url"]}">{e["title"]}</a>' for e in block)
+    \"\"\"Devuelve un bloque de texto con cada título como enlace HTML clicable.\"\"\"
+    return \"\\n\".join(f'<a href=\"{e[\"url\"]}\">{e[\"title\"]}</a>' for e in block)
 
+
+def is_owner(update: Update) -> bool:
+    user = update.effective_user
+    return bool(user and user.id == OWNER_ID)
+
+
+# ---------------- COMANDOS ----------------
 
 async def settopic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message:
         return
+
+    if not is_owner(update):
+        await message.reply_text("❌ No tienes permiso para usar este comando.")
+        return
+
     if len(context.args) != 1:
         await message.reply_text("Uso: /settopic A")
         return
@@ -90,6 +99,11 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message:
         return
+
+    if not is_owner(update):
+        await message.reply_text("❌ No tienes permiso para usar este comando.")
+        return
+
     if len(context.args) < 2:
         await message.reply_text("Uso: /add TÍTULO URL")
         return
@@ -107,10 +121,9 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data["entries"].setdefault(letra, [])
     data["messages"].setdefault(letra, [])
 
-    # Evitar duplicados por título (ignorando mayúsculas/acentos)
-    normalized_new = normalize(title)
+    new_norm = normalize(title)
     for e in data["entries"][letra]:
-        if normalize(e["title"]) == normalized_new:
+        if normalize(e["title"]) == new_norm:
             await message.reply_text("⚠️ Esa película ya existe en esa letra.")
             return
 
@@ -126,6 +139,11 @@ async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message:
         return
+
+    if not is_owner(update):
+        await message.reply_text("❌ No tienes permiso para usar este comando.")
+        return
+
     if len(context.args) < 2:
         await message.reply_text("Uso: /delete TÍTULO (AÑO)")
         return
@@ -159,10 +177,17 @@ async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def rebuild(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
-    if not message or len(context.args) != 1:
-        if message:
-            await message.reply_text("Uso: /rebuild A")
+    if not message:
         return
+
+    if not is_owner(update):
+        await message.reply_text("❌ No tienes permiso para usar este comando.")
+        return
+
+    if len(context.args) != 1:
+        await message.reply_text("Uso: /rebuild A")
+        return
+
     letra = context.args[0].upper()
     await rebuild_topic(update, context, letra)
 
@@ -179,8 +204,11 @@ async def rebuild_topic(update: Update, context: ContextTypes.DEFAULT_TYPE, letr
 
     topic_id = data["topics"][letra]
     entries = data["entries"].get(letra, [])
-    blocks = split_blocks(entries)
 
+    # Ordenar SIEMPRE con acentos normalizados
+    entries.sort(key=lambda x: normalize(x["title"]))
+
+    blocks = split_blocks(entries)
     chat_id = update.effective_chat.id
 
     # Borrar mensajes antiguos del bot (lista + botón)
@@ -192,7 +220,7 @@ async def rebuild_topic(update: Update, context: ContextTypes.DEFAULT_TYPE, letr
 
     data["messages"][letra] = []
 
-    # Publicar bloques de la letra
+    # Publicar bloques
     for block in blocks:
         if not block:
             continue
@@ -222,41 +250,44 @@ async def rebuild_topic(update: Update, context: ContextTypes.DEFAULT_TYPE, letr
 
 async def importar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
-    if not message or len(context.args) != 1:
-        if message:
-            await message.reply_text("Uso: /importar A")
+    if not message:
         return
+
+    if not is_owner(update):
+        await message.reply_text("❌ No tienes permiso para usar este comando.")
+        return
+
+    if len(context.args) != 1:
+        await message.reply_text("Uso: /importar A")
+        return
+
     letra = context.args[0].upper()
     context.user_data["import_letter"] = letra
     context.user_data["import_buffer"] = []
     await message.reply_text(
-        f"Modo importación para la letra {letra}.\n\n"
-        "Copia TODO el listado de esa letra (cada peli o colección en UNA línea, "
-        "con el enlace de pixeldrain al final) y pégalo aquí (puede ser en varios mensajes).\n"
+        f"Modo importación para la letra {letra}.\\n\\n"
+        "Copia TODO el listado de esa letra (cada peli o colección en UNA sola línea, "
+        "con el enlace de pixeldrain al final) y pégalo aquí (pueden ser varios mensajes).\\n"
         "Cuando termines, usa /finalizar."
     )
 
 
 async def recv_import(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Recoge texto mientras estamos en modo importar
+    # Recoge texto mientras el owner está en modo importación
     if "import_letter" not in context.user_data:
         return
+
+    if not is_owner(update):
+        return
+
     if not update.message or not update.message.text:
         return
+
     context.user_data["import_buffer"].append(update.message.text)
 
 
 def parse_line(line: str):
-    """
-    Línea de ejemplo:
-      - 'X (2022) (https://pixeldrain.net/u/abc123)'
-      - 'Batman - El Caballero Oscuro (TRILOGÍA COMPLETA) (https://pixeldrain.net/l/1o2QU1w4)'
-      - 'Colección Pixar (https://pixeldrain.net/l/xxxxxx)'
-
-    Estrategia:
-      1. Buscar la primera URL de pixeldrain.
-      2. El título es TODO lo que hay antes de la URL (limpiando el paréntesis que abra).
-    """
+    \"\"\"Parsea una línea y devuelve {'title': ..., 'url': ...} o None.\"\"\"
     m = PIXEL_URL_RE.search(line)
     if not m:
         return None
@@ -264,7 +295,6 @@ def parse_line(line: str):
     url = m.group(0).strip()
     title_part = line[: m.start()].rstrip()
 
-    # Si acaba en '(' por cosas del formato: 'Título (...) ( URL'
     if title_part.endswith("("):
         title_part = title_part[:-1].rstrip()
 
@@ -277,9 +307,15 @@ def parse_line(line: str):
 
 async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
+    if not message:
+        return
+
+    if not is_owner(update):
+        await message.reply_text("❌ No tienes permiso para usar este comando.")
+        return
+
     if "import_letter" not in context.user_data:
-        if message:
-            await message.reply_text("No estás importando nada. Usa /importar A primero.")
+        await message.reply_text("No estás importando nada. Usa /importar A primero.")
         return
 
     letra = context.user_data["import_letter"]
@@ -300,28 +336,31 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data["entries"][letra].append(parsed)
             total += 1
 
-    # Eliminar duplicados y ordenar con soporte de acentos
+    # Eliminar duplicados y ordenar con acentos normalizados
     dedup = {}
     for e in data["entries"][letra]:
         key = (normalize(e["title"]), e["url"])
         dedup[key] = e
+
     data["entries"][letra] = sorted(dedup.values(), key=lambda x: normalize(x["title"]))
     save_data(data)
 
     context.user_data.clear()
 
-    if message:
-        await message.reply_text(
-            f"Importación completada para la letra {letra}. {total} entradas añadidas. "
-            "Reconstruyendo…"
-        )
+    await message.reply_text(
+        f"Importación completada para la letra {letra}. {total} entradas añadidas.\\n"
+        "Reconstruyendo…"
+    )
     await rebuild_topic(update, context, letra)
 
+
+# ---------------- MAIN ----------------
 
 def main():
     token = os.environ.get("BOT_TOKEN")
     if not token:
         raise RuntimeError("Falta la variable de entorno BOT_TOKEN.")
+
     app = ApplicationBuilder().token(token).build()
 
     app.add_handler(CommandHandler("settopic", settopic))
@@ -331,7 +370,7 @@ def main():
     app.add_handler(CommandHandler("importar", importar))
     app.add_handler(CommandHandler("finalizar", finalizar))
 
-    # Mientras estamos en importación, cualquier texto se añade al buffer
+    # Mientras importas, cualquier texto del OWNER se añade al buffer
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, recv_import))
 
     app.run_polling()

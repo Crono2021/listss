@@ -39,12 +39,17 @@ def normalize(s: str) -> str:
 
 def load_data():
     if not os.path.exists(DATA_FILE):
-        return {"topics": {}, "entries": {}, "messages": {}}
+        data = {"topics": {}, "entries": {}, "messages": {}, "owner_group_id": None}
+        return data
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except Exception:
-        return {"topics": {}, "entries": {}, "messages": {}}
+        data = {"topics": {}, "entries": {}, "messages": {}, "owner_group_id": None}
+    # Asegurar clave nueva para compatibilidad
+    if "owner_group_id" not in data:
+        data["owner_group_id"] = None
+    return data
 
 
 def save_data(data):
@@ -68,6 +73,27 @@ def is_owner(update: Update) -> bool:
 
 
 # ---------------- COMANDOS ----------------
+
+async def setgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Guardar el grupo donde se aplican los comandos cuando hablas por privado."""
+    message = update.message
+    if not message:
+        return
+
+    if not is_owner(update):
+        await message.reply_text("❌ No tienes permiso para usar este comando.")
+        return
+
+    chat = update.effective_chat
+    if chat.type == "private":
+        await message.reply_text("Este comando debe usarse dentro del grupo, no en privado.")
+        return
+
+    data = load_data()
+    data["owner_group_id"] = chat.id
+    save_data(data)
+    await message.reply_text("✅ Grupo registrado. Ahora puedes usar los comandos en privado.")
+
 
 async def settopic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -208,7 +234,24 @@ async def rebuild_topic(update: Update, context: ContextTypes.DEFAULT_TYPE, letr
     entries.sort(key=lambda x: normalize(x["title"]))
 
     blocks = split_blocks(entries)
-    chat_id = update.effective_chat.id
+
+    # Determinar en qué chat publicar (grupo o el grupo guardado si estás en privado)
+    chat = update.effective_chat
+    chat_id = None
+
+    if chat and chat.type != "private":
+        chat_id = chat.id
+    else:
+        # Estamos en privado, usar grupo guardado
+        owner_group_id = data.get("owner_group_id")
+        if not owner_group_id:
+            if update.message:
+                await update.message.reply_text(
+                    "❌ No tengo ningún grupo configurado.\n"
+                    "Ve al grupo y usa /setgroup una vez."
+                )
+            return
+        chat_id = owner_group_id
 
     # Borrar mensajes antiguos del bot (lista + botón)
     for msg_id in data["messages"].get(letra, []):
@@ -362,6 +405,7 @@ def main():
 
     app = ApplicationBuilder().token(token).build()
 
+    app.add_handler(CommandHandler("setgroup", setgroup))
     app.add_handler(CommandHandler("settopic", settopic))
     app.add_handler(CommandHandler("add", add))
     app.add_handler(CommandHandler("delete", delete))

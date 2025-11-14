@@ -3,7 +3,7 @@ import os
 from telegram import Update, constants
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-DATA_FILE = "data.json"
+DATA_FILE = os.environ.get("DATA_FILE", "/data/data.json")
 MAX_LINES = 100
 
 def load_data():
@@ -13,6 +13,7 @@ def load_data():
         return json.load(f)
 
 def save_data(data):
+    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
@@ -53,7 +54,6 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data["entries"].setdefault(letra, [])
     data["messages"].setdefault(letra, [])
 
-    # Duplicate detection
     for e in data["entries"][letra]:
         if e["title"].strip().lower() == titulo.strip().lower():
             await update.message.reply_text("⚠️ Esta película ya existe. No se añadió.")

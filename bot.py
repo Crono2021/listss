@@ -2,6 +2,8 @@ import json
 import os
 import re
 import unicodedata
+import html
+import requests
 from telegram import Update, constants
 from telegram.ext import (
     ApplicationBuilder,
@@ -39,16 +41,33 @@ def normalize(s: str) -> str:
 
 def load_data():
     if not os.path.exists(DATA_FILE):
-        data = {"topics": {}, "entries": {}, "messages": {}, "owner_group_id": None}
-        return data
+        return {
+            "topics": {},
+            "entries": {},
+            "messages": {},
+            "owner_group_id": None,
+            "fichas_group_id": None,
+            "fichas_topic_id": None,
+        }
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception:
-        data = {"topics": {}, "entries": {}, "messages": {}, "owner_group_id": None}
-    # Asegurar clave nueva para compatibilidad
+        data = {
+            "topics": {},
+            "entries": {},
+            "messages": {},
+            "owner_group_id": None,
+            "fichas_group_id": None,
+            "fichas_topic_id": None,
+        }
+    # Añadir claves nuevas si faltan
     if "owner_group_id" not in data:
         data["owner_group_id"] = None
+    if "fichas_group_id" not in data:
+        data["fichas_group_id"] = None
+    if "fichas_topic_id" not in data:
+        data["fichas_topic_id"] = None
     return data
 
 
@@ -64,12 +83,165 @@ def split_blocks(entries):
 
 def fmt_block(block):
     """Devuelve un bloque de texto con cada título como enlace HTML clicable."""
-    return "\n".join(f'<a href="{e["url"]}">{e["title"]}</a>' for e in block)
+    return "\n".join(f'<a href="{e["url"]}">{html.escape(e["title"])}</a>' for e in block)
 
 
 def is_owner(update: Update) -> bool:
     user = update.effective_user
     return bool(user and user.id == OWNER_ID)
+
+
+# ---------------- TMDB ----------------
+
+def get_tmdb_info(title: str, year: str | None):
+    api_key = os.environ.get("TMDB_API_KEY")
+    if not api_key:
+        return None
+
+    try:
+        # Buscar película
+        params = {
+            "api_key": api_key,
+            "language": "es-ES",
+            "query": title,
+        }
+        if year:
+            params["year"] = year
+
+        r = requests.get(
+            "https://api.themoviedb.org/3/search/movie",
+            params=params,
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json()
+        results = data.get("results") or []
+        if not results:
+            return None
+
+        movie = results[0]
+        movie_id = movie.get("id")
+        if not movie_id:
+            return None
+
+        # Detalles de la película
+        r2 = requests.get(
+            f"https://api.themoviedb.org/3/movie/{movie_id}",
+            params={"api_key": api_key, "language": "es-ES"},
+            timeout=10,
+        )
+        r2.raise_for_status()
+        det = r2.json()
+
+        overview = det.get("overview") or movie.get("overview") or ""
+        if len(overview) > 800:
+            overview = overview[:800].rsplit(" ", 1)[0] + "…"
+
+        genres = ", ".join(g.get("name") for g in det.get("genres", []) if g.get("name"))
+        runtime = det.get("runtime")  # minutos
+        vote = det.get("vote_average")
+
+        poster_path = det.get("poster_path") or movie.get("poster_path")
+        poster_url = None
+        if poster_path:
+            poster_url = f"https://image.tmdb.org/t/p/w780{poster_path}"
+
+        return {
+            "overview": overview,
+            "genres": genres,
+            "runtime": runtime,
+            "vote": vote,
+            "poster_url": poster_url,
+        }
+    except Exception:
+        return None
+
+
+async def create_ficha_for_movie(title: str, url: str, context: ContextTypes.DEFAULT_TYPE):
+    """Crea ficha en el grupo/tema configurado con /setfichas."""
+    data = load_data()
+    fichas_group_id = data.get("fichas_group_id")
+    fichas_topic_id = data.get("fichas_topic_id")
+
+    if not fichas_group_id or not fichas_topic_id:
+        # No hay destino configurado, no hacemos nada
+        return
+
+    # Extraer año del título, si hay "(1980)"
+    year = None
+    m = re.search(r"\((\d{4})\)", title)
+    if m:
+        year = m.group(1)
+
+    # Quitar el año del título para buscar en TMDB (opcional)
+    title_for_tmdb = re.sub(r"\(\d{4}\)", "", title).strip()
+
+    tmdb = get_tmdb_info(title_for_tmdb, year)
+    if tmdb:
+        overview = tmdb.get("overview") or ""
+        genres = tmdb.get("genres") or ""
+        runtime = tmdb.get("runtime")
+        vote = tmdb.get("vote")
+        poster_url = tmdb.get("poster_url")
+    else:
+        overview = ""
+        genres = ""
+        runtime = None
+        vote = None
+        poster_url = None
+
+    # Construir texto de la ficha
+    lines = []
+
+    # Título
+    lines.append(html.escape(title))
+    lines.append("")  # línea en blanco
+
+    # Rating, géneros, duración
+    info_lines = []
+    if vote is not None:
+        info_lines.append(f"⭐ Puntuación TMDB: {vote:.1f}/10")
+    if genres:
+        info_lines.append(f"🎭 Géneros: {html.escape(genres)}")
+    if runtime:
+        info_lines.append(f"🕒 Duración: {runtime} minutos")
+
+    if info_lines:
+        lines.extend(info_lines)
+        lines.append("")
+
+    # Sinopsis
+    if overview:
+        lines.append(html.escape(overview))
+        lines.append("")
+
+    # Enlace final
+    safe_url = html.escape(url, quote=True)
+    lines.append(f'Para ver la película pulsa 👉 <a href="{safe_url}">AQUÍ</a>')
+
+    caption = "\n".join(lines)
+
+    # Enviar foto + caption o solo texto
+    try:
+        if poster_url:
+            await context.bot.send_photo(
+                chat_id=fichas_group_id,
+                message_thread_id=fichas_topic_id,
+                photo=poster_url,
+                caption=caption,
+                parse_mode=constants.ParseMode.HTML,
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=fichas_group_id,
+                message_thread_id=fichas_topic_id,
+                text=caption,
+                parse_mode=constants.ParseMode.HTML,
+                disable_web_page_preview=False,
+            )
+    except Exception:
+        # Si falla el envío, no rompemos el resto del flujo
+        pass
 
 
 # ---------------- COMANDOS ----------------
@@ -86,13 +258,40 @@ async def setgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat = update.effective_chat
     if chat.type == "private":
-        await message.reply_text("Este comando debe usarse dentro del grupo, no en privado.")
+        await message.reply_text("Este comando debe usarse dentro del grupo de listados, no en privado.")
         return
 
     data = load_data()
     data["owner_group_id"] = chat.id
     save_data(data)
-    await message.reply_text("✅ Grupo registrado. Ahora puedes usar los comandos en privado.")
+    await message.reply_text("✅ Grupo de listados registrado. Ahora puedes usar los comandos en privado.")
+
+
+async def setfichas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Guardar el grupo/tema donde se publican las fichas TMDB."""
+    message = update.message
+    if not message:
+        return
+
+    if not is_owner(update):
+        await message.reply_text("❌ No tienes permiso para usar este comando.")
+        return
+
+    chat = update.effective_chat
+    topic_id = message.message_thread_id
+
+    if chat.type == "private":
+        await message.reply_text("Este comando debe usarse en el grupo de fichas, dentro del tema deseado.")
+        return
+    if topic_id is None:
+        await message.reply_text("Este comando debe usarse dentro del TEMA donde quieres las fichas.")
+        return
+
+    data = load_data()
+    data["fichas_group_id"] = chat.id
+    data["fichas_topic_id"] = topic_id
+    save_data(data)
+    await message.reply_text("✅ Tema de fichas configurado correctamente.")
 
 
 async def settopic(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -130,7 +329,7 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(context.args) < 2:
-        await message.reply_text("Uso: /add TÍTULO URL")
+        await message.reply_text("Uso: /add TÍTULO (AÑO) URL")
         return
 
     url = context.args[-1]
@@ -156,7 +355,12 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data["entries"][letra].sort(key=lambda x: normalize(x["title"]))
     save_data(data)
 
+    # Reconstruir listado
     await rebuild_topic(update, context, letra)
+
+    # Crear ficha en el grupo de fichas (si está configurado)
+    await create_ficha_for_movie(title, url, context)
+
     await message.reply_text(f"Añadido en la letra {letra}.")
 
 
@@ -247,7 +451,7 @@ async def rebuild_topic(update: Update, context: ContextTypes.DEFAULT_TYPE, letr
         if not owner_group_id:
             if update.message:
                 await update.message.reply_text(
-                    "❌ No tengo ningún grupo configurado.\n"
+                    "❌ No tengo ningún grupo de listados configurado.\n"
                     "Ve al grupo y usa /setgroup una vez."
                 )
             return
@@ -406,6 +610,7 @@ def main():
     app = ApplicationBuilder().token(token).build()
 
     app.add_handler(CommandHandler("setgroup", setgroup))
+    app.add_handler(CommandHandler("setfichas", setfichas))
     app.add_handler(CommandHandler("settopic", settopic))
     app.add_handler(CommandHandler("add", add))
     app.add_handler(CommandHandler("delete", delete))

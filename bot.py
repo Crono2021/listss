@@ -122,12 +122,18 @@ async def export_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def main():
     TOKEN = os.environ.get("BOT_TOKEN")
     app = ApplicationBuilder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("settopic", settopic))
     app.add_handler(CommandHandler("add", add))
     app.add_handler(CommandHandler("rebuild", rebuild))
     app.add_handler(CommandHandler("export", export_list))
-    await app.run_polling()
+
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    await app.updater.idle()
 
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(main())
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())

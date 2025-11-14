@@ -26,12 +26,12 @@ def format_block(block):
     return "\n".join([f'<a href="{e["url"]}">{e["title"]}</a>' for e in block])
 
 async def settopic(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = load_data()
     if len(context.args) != 1:
         await update.message.reply_text("Uso: /settopic A")
         return
     letra = context.args[0].upper()
     topic_id = update.message.message_thread_id
+    data = load_data()
     data["topics"][letra] = topic_id
     save_data(data)
     await update.message.reply_text(f"Tema asociado a la letra {letra} correctamente.")
@@ -114,10 +114,9 @@ async def importar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def recoger_reenviado(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "import_letter" not in context.user_data:
         return
-    if not update.message or not (update.message.text_html or update.message.caption_html):
+    if not update.message or not update.message.text:
         return
-    texto = update.message.text_html or update.message.caption_html
-    context.user_data["import_buffer"].append(texto)
+    context.user_data["import_buffer"].append(update.message.text)
 
 async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "import_letter" not in context.user_data:
@@ -130,10 +129,23 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data["entries"].setdefault(letra, [])
 
     total = 0
-    regex = re.compile(r'<a href="([^"]+)">(.+?)</a>')
+
+    # HTML pattern
+    html_regex = re.compile(r'<a href="([^"]+)">(.+?)</a>')
+
+    # Plain text: Title (Year) (URL)
+    plain_regex = re.compile(r'(.+?)\s*\((\d{4})\)\s*\((https?://[^\s]+)\)')
+
     for msg in buffer:
-        for url, title in regex.findall(msg):
+        # HTML
+        for url, title in html_regex.findall(msg):
             data["entries"][letra].append({"title": title, "url": url})
+            total += 1
+
+        # Plain one‑line
+        for title, year, url in plain_regex.findall(msg):
+            full_title = f"{title.strip()} ({year})"
+            data["entries"][letra].append({"title": full_title, "url": url})
             total += 1
 
     data["entries"][letra] = sorted(

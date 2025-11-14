@@ -1,4 +1,3 @@
-
 import json
 import os
 import re
@@ -32,9 +31,9 @@ PIXEL_URL_RE = re.compile(
 # ---------------- UTILIDADES ----------------
 
 def normalize(s: str) -> str:
-    \"\"\"Normaliza texto para orden alfabético (quita acentos y pasa a minúsculas).\"\"\"
+    """Normaliza texto para orden alfabético (quita acentos y pasa a minúsculas)."""
     nf = unicodedata.normalize("NFD", s)
-    sin_acentos = \"\".join(c for c in nf if unicodedata.category(c) != "Mn")
+    sin_acentos = "".join(c for c in nf if unicodedata.category(c) != "Mn")
     return sin_acentos.lower()
 
 
@@ -59,8 +58,8 @@ def split_blocks(entries):
 
 
 def fmt_block(block):
-    \"\"\"Devuelve un bloque de texto con cada título como enlace HTML clicable.\"\"\"
-    return \"\\n\".join(f'<a href=\"{e[\"url\"]}\">{e[\"title\"]}</a>' for e in block)
+    """Devuelve un bloque de texto con cada título como enlace HTML clicable."""
+    return "\n".join(f'<a href="{e["url"]}">{e["title"]}</a>' for e in block)
 
 
 def is_owner(update: Update) -> bool:
@@ -265,9 +264,9 @@ async def importar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["import_letter"] = letra
     context.user_data["import_buffer"] = []
     await message.reply_text(
-        f"Modo importación para la letra {letra}.\\n\\n"
+        f"Modo importación para la letra {letra}.\n\n"
         "Copia TODO el listado de esa letra (cada peli o colección en UNA sola línea, "
-        "con el enlace de pixeldrain al final) y pégalo aquí (pueden ser varios mensajes).\\n"
+        "con el enlace de pixeldrain al final) y pégalo aquí (pueden ser varios mensajes).\n"
         "Cuando termines, usa /finalizar."
     )
 
@@ -287,7 +286,7 @@ async def recv_import(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def parse_line(line: str):
-    \"\"\"Parsea una línea y devuelve {'title': ..., 'url': ...} o None.\"\"\"
+    """Parsea una línea y devuelve {'title': ..., 'url': ...} o None."""
     m = PIXEL_URL_RE.search(line)
     if not m:
         return None
@@ -348,7 +347,7 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
 
     await message.reply_text(
-        f"Importación completada para la letra {letra}. {total} entradas añadidas.\\n"
+        f"Importación completada para la letra {letra}. {total} entradas añadidas.\n"
         "Reconstruyendo…"
     )
     await rebuild_topic(update, context, letra)

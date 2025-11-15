@@ -138,7 +138,7 @@ def get_tmdb_info(title: str, year: str | None):
             overview = overview[:800].rsplit(" ", 1)[0] + "…"
 
         genres = ", ".join(g.get("name") for g in det.get("genres", []) if g.get("name"))
-        runtime = det.get("runtime")  # minutos
+        runtime = det.get("runtime")
         vote = det.get("vote_average")
 
         poster_path = det.get("poster_path") or movie.get("poster_path")
@@ -164,16 +164,15 @@ async def create_ficha_for_movie(title: str, url: str, context: ContextTypes.DEF
     fichas_topic_id = data.get("fichas_topic_id")
 
     if not fichas_group_id or not fichas_topic_id:
-        # No hay destino configurado, no hacemos nada
         return
 
-    # Extraer año del título, si hay "(1980)"
+    # Extraer año
     year = None
     m = re.search(r"\((\d{4})\)", title)
     if m:
         year = m.group(1)
 
-    # Quitar el año del título para buscar en TMDB (opcional)
+    # Título para búsqueda TMDB
     title_for_tmdb = re.sub(r"\(\d{4}\)", "", title).strip()
 
     tmdb = get_tmdb_info(title_for_tmdb, year)
@@ -190,14 +189,11 @@ async def create_ficha_for_movie(title: str, url: str, context: ContextTypes.DEF
         vote = None
         poster_url = None
 
-    # Construir texto de la ficha
+    # Construcción de ficha
     lines = []
-
-    # Título
     lines.append(html.escape(title))
-    lines.append("")  # línea en blanco
+    lines.append("")
 
-    # Rating, géneros, duración
     info_lines = []
     if vote is not None:
         info_lines.append(f"⭐ Puntuación TMDB: {vote:.1f}/10")
@@ -210,18 +206,15 @@ async def create_ficha_for_movie(title: str, url: str, context: ContextTypes.DEF
         lines.extend(info_lines)
         lines.append("")
 
-    # Sinopsis
     if overview:
         lines.append(html.escape(overview))
         lines.append("")
 
-    # Enlace final
     safe_url = html.escape(url, quote=True)
-    lines.append(f'Para ver la película pulsa 👉 <a href="{safe_url}">AQUÍ</a>')
+    lines.append(f'Para ver la película pulsa <a href="{safe_url}">AQUÍ</a>')
 
     caption = "\n".join(lines)
 
-    # Enviar foto + caption o solo texto
     try:
         if poster_url:
             await context.bot.send_photo(
@@ -240,7 +233,6 @@ async def create_ficha_for_movie(title: str, url: str, context: ContextTypes.DEF
                 disable_web_page_preview=False,
             )
     except Exception:
-        # Si falla el envío, no rompemos el resto del flujo
         pass
 
 
@@ -268,7 +260,6 @@ async def setgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def setfichas(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Guardar el grupo/tema donde se publican las fichas TMDB."""
     message = update.message
     if not message:
         return
@@ -358,7 +349,7 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Reconstruir listado
     await rebuild_topic(update, context, letra)
 
-    # Crear ficha en el grupo de fichas (si está configurado)
+    # Crear ficha automáticamente
     await create_ficha_for_movie(title, url, context)
 
     await message.reply_text(f"Añadido en la letra {letra}.")
@@ -434,30 +425,24 @@ async def rebuild_topic(update: Update, context: ContextTypes.DEFAULT_TYPE, letr
     topic_id = data["topics"][letra]
     entries = data["entries"].get(letra, [])
 
-    # Ordenar SIEMPRE con acentos normalizados
     entries.sort(key=lambda x: normalize(x["title"]))
 
     blocks = split_blocks(entries)
 
-    # Determinar en qué chat publicar (grupo o el grupo guardado si estás en privado)
     chat = update.effective_chat
-    chat_id = None
-
-    if chat and chat.type != "private":
+    if chat.type != "private":
         chat_id = chat.id
     else:
-        # Estamos en privado, usar grupo guardado
         owner_group_id = data.get("owner_group_id")
         if not owner_group_id:
-            if update.message:
-                await update.message.reply_text(
-                    "❌ No tengo ningún grupo de listados configurado.\n"
-                    "Ve al grupo y usa /setgroup una vez."
-                )
+            await update.message.reply_text(
+                "❌ No tengo ningún grupo de listados configurado.\n"
+                "Ve al grupo y usa /setgroup una vez."
+            )
             return
         chat_id = owner_group_id
 
-    # Borrar mensajes antiguos del bot (lista + botón)
+    # Borrar lista anterior
     for msg_id in data["messages"].get(letra, []):
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
@@ -466,7 +451,7 @@ async def rebuild_topic(update: Update, context: ContextTypes.DEFAULT_TYPE, letr
 
     data["messages"][letra] = []
 
-    # Publicar bloques
+    # Enviar bloques
     for block in blocks:
         if not block:
             continue
@@ -480,7 +465,7 @@ async def rebuild_topic(update: Update, context: ContextTypes.DEFAULT_TYPE, letr
         )
         data["messages"][letra].append(msg.message_id)
 
-    # Botón final "Volver al índice"
+    # Botón final
     btn_text = f'<a href="{INDEX_URL}">Volver al índice</a>'
     msg = await context.bot.send_message(
         chat_id=chat_id,
@@ -512,20 +497,16 @@ async def importar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["import_buffer"] = []
     await message.reply_text(
         f"Modo importación para la letra {letra}.\n\n"
-        "Copia TODO el listado de esa letra (cada peli o colección en UNA sola línea, "
-        "con el enlace de pixeldrain al final) y pégalo aquí (pueden ser varios mensajes).\n"
+        "Copia TODO el listado de esa letra y pégalo aquí (pueden ser varios mensajes).\n"
         "Cuando termines, usa /finalizar."
     )
 
 
 async def recv_import(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Recoge texto mientras el owner está en modo importación
     if "import_letter" not in context.user_data:
         return
-
     if not is_owner(update):
         return
-
     if not update.message or not update.message.text:
         return
 
@@ -533,14 +514,12 @@ async def recv_import(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def parse_line(line: str):
-    """Parsea una línea y devuelve {'title': ..., 'url': ...} o None."""
     m = PIXEL_URL_RE.search(line)
     if not m:
         return None
 
     url = m.group(0).strip()
     title_part = line[: m.start()].rstrip()
-
     if title_part.endswith("("):
         title_part = title_part[:-1].rstrip()
 
@@ -582,7 +561,6 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data["entries"][letra].append(parsed)
             total += 1
 
-    # Eliminar duplicados y ordenar con acentos normalizados
     dedup = {}
     for e in data["entries"][letra]:
         key = (normalize(e["title"]), e["url"])
@@ -618,7 +596,6 @@ def main():
     app.add_handler(CommandHandler("importar", importar))
     app.add_handler(CommandHandler("finalizar", finalizar))
 
-    # Mientras importas, cualquier texto del OWNER se añade al buffer
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, recv_import))
 
     app.run_polling()

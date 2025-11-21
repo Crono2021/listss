@@ -16,15 +16,12 @@ from telegram.ext import (
 
 # ---------------- CONFIGURACIÓN ----------------
 
-DATA_FILE = "/data/data.json"  # Volume montado en Railway
+DATA_FILE = "/data/data.json"
 MAX_LINES = 100
-
 INDEX_URL = "https://t.me/cinehdcastellano2/2/2840"
 
-# SOLO ESTE USUARIO PUEDE USAR LOS COMANDOS (TU ID)
 OWNER_ID = 5540195020
 
-# Detectar URLs de pixeldrain (archivos y listas)
 PIXEL_URL_RE = re.compile(
     r"https?://pixeldrain\.net/(?:u|l)/[^\s)]+",
     re.IGNORECASE,
@@ -34,7 +31,6 @@ PIXEL_URL_RE = re.compile(
 # ---------------- UTILIDADES ----------------
 
 def normalize(s: str) -> str:
-    """Normaliza texto para orden alfabético (quita acentos y pasa a minúsculas)."""
     nf = unicodedata.normalize("NFD", s)
     sin_acentos = "".join(c for c in nf if unicodedata.category(c) != "Mn")
     return sin_acentos.lower()
@@ -53,7 +49,7 @@ def load_data():
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except Exception:
+    except:
         data = {
             "topics": {},
             "entries": {},
@@ -62,7 +58,6 @@ def load_data():
             "fichas_group_id": None,
             "fichas_topic_id": None,
         }
-    # Añadir claves nuevas si faltan
     if "owner_group_id" not in data:
         data["owner_group_id"] = None
     if "fichas_group_id" not in data:
@@ -83,13 +78,11 @@ def split_blocks(entries):
 
 
 def fmt_block(block):
-    """Devuelve un bloque de texto con cada título como enlace HTML clicable."""
     return "\n".join(f'<a href="{e["url"]}">{html.escape(e["title"])}</a>' for e in block)
 
 
 def is_owner(update: Update) -> bool:
-    user = update.effective_user
-    return bool(user and user.id == OWNER_ID)
+    return update.effective_user and update.effective_user.id == OWNER_ID
 
 
 # ---------------- TMDB ----------------
@@ -98,54 +91,36 @@ def get_tmdb_info(title: str, year: str | None):
     api_key = os.environ.get("TMDB_API_KEY")
     if not api_key:
         return None
-
     try:
-        # Buscar película
-        params = {
-            "api_key": api_key,
-            "language": "es-ES",
-            "query": title,
-        }
+        params = {"api_key": api_key, "language": "es-ES", "query": title}
         if year:
             params["year"] = year
-
-        r = requests.get(
-            "https://api.themoviedb.org/3/search/movie",
-            params=params,
-            timeout=10,
-        )
+        r = requests.get("https://api.themoviedb.org/3/search/movie", params=params, timeout=10)
         r.raise_for_status()
-        data = r.json()
-        results = data.get("results") or []
+        results = r.json().get("results") or []
         if not results:
             return None
-
         movie = results[0]
         movie_id = movie.get("id")
         if not movie_id:
             return None
 
-        # Detalles de la película
         r2 = requests.get(
             f"https://api.themoviedb.org/3/movie/{movie_id}",
             params={"api_key": api_key, "language": "es-ES"},
             timeout=10,
         )
-        r2.raise_for_status()
         det = r2.json()
 
         overview = det.get("overview") or movie.get("overview") or ""
         if len(overview) > 800:
             overview = overview[:800].rsplit(" ", 1)[0] + "…"
 
-        genres = ", ".join(g.get("name") for g in det.get("genres", []) if g.get("name"))
+        genres = ", ".join(g["name"] for g in det.get("genres", []) if g.get("name"))
         runtime = det.get("runtime")
         vote = det.get("vote_average")
-
         poster_path = det.get("poster_path") or movie.get("poster_path")
-        poster_url = None
-        if poster_path:
-            poster_url = f"https://image.tmdb.org/t/p/w780{poster_path}"
+        poster_url = f"https://image.tmdb.org/t/p/w780{poster_path}" if poster_path else None
 
         return {
             "overview": overview,
@@ -154,35 +129,31 @@ def get_tmdb_info(title: str, year: str | None):
             "vote": vote,
             "poster_url": poster_url,
         }
-    except Exception:
+    except:
         return None
 
 
 async def create_ficha_for_movie(title: str, url: str, context: ContextTypes.DEFAULT_TYPE):
-    """Crea ficha en el grupo/tema configurado con /setfichas."""
     data = load_data()
-    fichas_group_id = data.get("fichas_group_id")
-    fichas_topic_id = data.get("fichas_topic_id")
-
-    if not fichas_group_id or not fichas_topic_id:
+    g = data.get("fichas_group_id")
+    t = data.get("fichas_topic_id")
+    if not g or not t:
         return
 
-    # Extraer año
     year = None
     m = re.search(r"\((\d{4})\)", title)
     if m:
         year = m.group(1)
 
-    # Título para búsqueda TMDB
     title_for_tmdb = re.sub(r"\(\d{4}\)", "", title).strip()
-
     tmdb = get_tmdb_info(title_for_tmdb, year)
+
     if tmdb:
-        overview = tmdb.get("overview") or ""
-        genres = tmdb.get("genres") or ""
-        runtime = tmdb.get("runtime")
-        vote = tmdb.get("vote")
-        poster_url = tmdb.get("poster_url")
+        overview = tmdb["overview"]
+        genres = tmdb["genres"]
+        runtime = tmdb["runtime"]
+        vote = tmdb["vote"]
+        poster_url = tmdb["poster_url"]
     else:
         overview = ""
         genres = ""
@@ -190,226 +161,157 @@ async def create_ficha_for_movie(title: str, url: str, context: ContextTypes.DEF
         vote = None
         poster_url = None
 
-    # Construcción de ficha
-    lines = []
-    lines.append(html.escape(title))
-    lines.append("")
-
-    info_lines = []
+    lines = [html.escape(title), ""]
     if vote is not None:
-        info_lines.append(f"⭐ Puntuación TMDB: {vote:.1f}/10")
+        lines.append(f"⭐ Puntuación TMDB: {vote:.1f}/10")
     if genres:
-        info_lines.append(f"🎭 Géneros: {html.escape(genres)}")
+        lines.append(f"🎭 Géneros: {html.escape(genres)}")
     if runtime:
-        info_lines.append(f"🕒 Duración: {runtime} minutos")
-
-    if info_lines:
-        lines.extend(info_lines)
+        lines.append(f"🕒 Duración: {runtime} minutos")
+    if vote or genres or runtime:
         lines.append("")
-
     if overview:
         lines.append(html.escape(overview))
         lines.append("")
-
     safe_url = html.escape(url, quote=True)
-    lines.append(f'Para ver la película pulsa <a href="{safe_url}">AQUÍ</a>')
+    lines.append(f'<a href="{safe_url}">Ver AQUÍ</a>')
 
     caption = "\n".join(lines)
 
     try:
         if poster_url:
             await context.bot.send_photo(
-                chat_id=fichas_group_id,
-                message_thread_id=fichas_topic_id,
-                photo=poster_url,
-                caption=caption,
-                parse_mode=constants.ParseMode.HTML,
+                chat_id=g, message_thread_id=t, photo=poster_url,
+                caption=caption, parse_mode=constants.ParseMode.HTML
             )
         else:
             await context.bot.send_message(
-                chat_id=fichas_group_id,
-                message_thread_id=fichas_topic_id,
-                text=caption,
-                parse_mode=constants.ParseMode.HTML,
-                disable_web_page_preview=False,
+                chat_id=g, message_thread_id=t, text=caption,
+                parse_mode=constants.ParseMode.HTML
             )
-    except Exception:
+    except:
         pass
 
 
 # ---------------- COMANDOS ----------------
 
 async def setgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    if not message:
-        return
-
     if not is_owner(update):
-        await message.reply_text("❌ No tienes permiso para usar este comando.")
-        return
-
-    chat = update.effective_chat
-    if chat.type == "private":
-        await message.reply_text("Este comando debe usarse dentro del grupo de listados, no en privado.")
-        return
-
+        return await update.message.reply_text("❌ No autorizado.")
+    if update.effective_chat.type == "private":
+        return await update.message.reply_text("Use este comando dentro del grupo.")
     data = load_data()
-    data["owner_group_id"] = chat.id
+    data["owner_group_id"] = update.effective_chat.id
     save_data(data)
-    await message.reply_text("✅ Grupo de listados registrado. Ahora puedes usar los comandos en privado.")
+    await update.message.reply_text("✅ Grupo registrado correctamente.")
 
 
 async def setfichas(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    if not message:
-        return
-
     if not is_owner(update):
-        await message.reply_text("❌ No tienes permiso para usar este comando.")
-        return
-
+        return await update.message.reply_text("❌ No autorizado.")
     chat = update.effective_chat
-    topic_id = message.message_thread_id
-
+    topic_id = update.message.message_thread_id
     if chat.type == "private":
-        await message.reply_text("Este comando debe usarse en el grupo de fichas, dentro del tema deseado.")
-        return
+        return await update.message.reply_text("Use este comando en grupo.")
     if topic_id is None:
-        await message.reply_text("Este comando debe usarse dentro del TEMA donde quieres las fichas.")
-        return
-
+        return await update.message.reply_text("Úsalo dentro del tema deseado.")
     data = load_data()
     data["fichas_group_id"] = chat.id
     data["fichas_topic_id"] = topic_id
     save_data(data)
-    await message.reply_text("✅ Tema de fichas configurado correctamente.")
+    await update.message.reply_text("✅ Tema de fichas configurado.")
 
 
 async def settopic(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    if not message:
-        return
-
     if not is_owner(update):
-        await message.reply_text("❌ No tienes permiso para usar este comando.")
-        return
-
+        return await update.message.reply_text("❌ No autorizado.")
     if len(context.args) != 1:
-        await message.reply_text("Uso: /settopic A")
-        return
-
+        return await update.message.reply_text("Uso: /settopic A")
     letra = context.args[0].upper()
-    topic_id = message.message_thread_id
+    topic_id = update.message.message_thread_id
     if topic_id is None:
-        await message.reply_text("Este comando debe usarse DENTRO del tema de esa letra.")
-        return
-
+        return await update.message.reply_text("Debe usarse dentro del tema deseado.")
     data = load_data()
     data["topics"][letra] = topic_id
     save_data(data)
-    await message.reply_text(f"Tema asociado a la letra {letra} correctamente.")
+    await update.message.reply_text(f"Letra {letra} configurada.")
 
+
+# ---------------- ADD ----------------
 
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    if not message:
-        return
-
     if not is_owner(update):
-        await message.reply_text("❌ No tienes permiso para usar este comando.")
-        return
-
+        return await update.message.reply_text("❌ No autorizado.")
     if len(context.args) < 2:
-        await message.reply_text("Uso: /add TÍTULO (AÑO) URL")
-        return
+        return await update.message.reply_text("Uso: /add TÍTULO (AÑO) URL")
 
     url = context.args[-1]
     title = " ".join(context.args[:-1]).strip()
     if not title:
-        await message.reply_text("El título no puede estar vacío.")
-        return
+        return await update.message.reply_text("Título vacío.")
 
     first = title[0].upper()
     letra = first if "A" <= first <= "Z" else "#"
 
     data = load_data()
     data["entries"].setdefault(letra, [])
-    data["messages"].setdefault(letra, [])
 
     new_norm = normalize(title)
     for e in data["entries"][letra]:
         if normalize(e["title"]) == new_norm:
-            await message.reply_text("⚠️ Esa película ya existe en esa letra.")
-            return
+            return await update.message.reply_text("⚠️ Ya existe ese título.")
 
     data["entries"][letra].append({"title": title, "url": url})
     data["entries"][letra].sort(key=lambda x: normalize(x["title"]))
     save_data(data)
 
-    # Reconstruir listado
     await rebuild_topic(update, context, letra)
-
-    # Crear ficha automáticamente
     await create_ficha_for_movie(title, url, context)
 
-    await message.reply_text(f"Añadido en la letra {letra}.")
+    await update.message.reply_text(f"Añadido en {letra}.")
 
 
 # ----------------------------------------------------
-#   DELETE MEJORADO (búsqueda parcial + botones)
+# DELETE SIN CONFIRMACION (Funciona 100%)
 # ----------------------------------------------------
 
 async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    if not message:
-        return
-
     if not is_owner(update):
-        await message.reply_text("❌ No tienes permiso para usar este comando.")
-        return
+        return await update.message.reply_text("❌ No autorizado.")
 
     if len(context.args) < 1:
-        await message.reply_text("Uso: /delete título")
-        return
+        return await update.message.reply_text("Uso: /delete título")
 
     query = " ".join(context.args).strip().lower()
     data = load_data()
 
     coincidencias = []
 
-    # Buscar coincidencias parciales en todas las letras
     for letra, lista in data["entries"].items():
-        for e in lista:
+        for idx, e in enumerate(lista):
             if query in e["title"].lower():
-                coincidencias.append((letra, e))
+                coincidencias.append((letra, idx, e))
 
     if not coincidencias:
-        await message.reply_text("❌ No se encontraron coincidencias.")
-        return
+        return await update.message.reply_text("❌ No se encontraron coincidencias.")
 
-    # Guardamos las coincidencias en user_data para usarlas al pulsar el botón
-    context.user_data["delete_matches"] = coincidencias
-
-    # Si solo hay una coincidencia, borramos directamente
     if len(coincidencias) == 1:
-        letra, entry = coincidencias[0]
-        data["entries"][letra].remove(entry)
+        letra, idx, entry = coincidencias[0]
+        data["entries"][letra].pop(idx)
         save_data(data)
-        await message.reply_text(f"✔ Eliminado: {entry['title']}\nReconstruyendo…")
+        await update.message.reply_text(f"✔ Eliminado: {entry['title']}")
         await rebuild_topic(update, context, letra)
-        context.user_data.pop("delete_matches", None)
         return
 
-    # Varias coincidencias: mostramos botones
     botones = []
-    for idx, (letra, entry) in enumerate(coincidencias):
+    for letra, idx, entry in coincidencias:
         botones.append([
-            InlineKeyboardButton(entry["title"], callback_data=f"del:{idx}")
+            InlineKeyboardButton(entry["title"], callback_data=f"del:{letra}:{idx}")
         ])
 
-    await message.reply_text(
-        "🎯 Varias coincidencias encontradas. Selecciona cuál eliminar:",
-        reply_markup=InlineKeyboardMarkup(botones)
+    await update.message.reply_text(
+        "Selecciona cuál eliminar:",
+        reply_markup=InlineKeyboardMarkup(botones),
     )
 
 
@@ -418,51 +320,32 @@ async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     if not is_owner(query):
-        await query.edit_message_text("❌ No tienes permiso para eliminar.")
-        return
+        return await query.edit_message_text("❌ No autorizado.")
 
-    try:
-        idx = int(query.data.replace("del:", ""))
-    except ValueError:
-        await query.edit_message_text("❌ Selección no válida.")
-        return
-
-    matches = context.user_data.get("delete_matches")
-    if not matches or idx < 0 or idx >= len(matches):
-        await query.edit_message_text("❌ No se encontró la coincidencia seleccionada.")
-        return
-
-    letra, entry = matches[idx]
+    _, letra, idx = query.data.split(":")
+    idx = int(idx)
 
     data = load_data()
     lista = data["entries"].get(letra, [])
 
-    # Eliminar la entrada exacta
-    lista[:] = [e for e in lista if not (e["title"] == entry["title"] and e["url"] == entry["url"])]
+    if idx < 0 or idx >= len(lista):
+        return await query.edit_message_text("❌ Ya no existe.")
+
+    entry = lista.pop(idx)
     save_data(data)
 
-    # Limpiar buffer
-    context.user_data.pop("delete_matches", None)
+    await query.edit_message_text(f"✔ Eliminado: {entry['title']}")
 
-    await query.edit_message_text(f"✔ Eliminado: {entry['title']}\nReconstruyendo…")
-
-    # Reconstruir el topic usando el mismo update (callback_query)
     await rebuild_topic(update, context, letra)
 
 
+# ---------------- REBUILD ----------------
+
 async def rebuild(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    if not message:
-        return
-
     if not is_owner(update):
-        await message.reply_text("❌ No tienes permiso para usar este comando.")
-        return
-
+        return await update.message.reply_text("❌ No autorizado.")
     if len(context.args) != 1:
-        await message.reply_text("Uso: /rebuild A")
-        return
-
+        return await update.message.reply_text("Uso: /rebuild A")
     letra = context.args[0].upper()
     await rebuild_topic(update, context, letra)
 
@@ -472,14 +355,12 @@ async def rebuild_topic(update: Update, context: ContextTypes.DEFAULT_TYPE, letr
     if letra not in data["topics"]:
         if update.message:
             await update.message.reply_text(
-                f"No tengo registrado el tema de la letra {letra}. "
-                f"Ve a ese tema y usa /settopic {letra}."
+                f"No está configurada la letra {letra}. Usa /settopic {letra}"
             )
         return
 
     topic_id = data["topics"][letra]
     entries = data["entries"].get(letra, [])
-
     entries.sort(key=lambda x: normalize(x["title"]))
 
     blocks = split_blocks(entries)
@@ -488,73 +369,52 @@ async def rebuild_topic(update: Update, context: ContextTypes.DEFAULT_TYPE, letr
     if chat.type != "private":
         chat_id = chat.id
     else:
-        owner_group_id = data.get("owner_group_id")
-        if not owner_group_id:
-            if update.message:
-                await update.message.reply_text(
-                    "❌ No tengo ningún grupo de listados configurado.\n"
-                    "Ve al grupo y usa /setgroup una vez."
-                )
-            return
-        chat_id = owner_group_id
+        group = data.get("owner_group_id")
+        if not group:
+            return await update.message.reply_text("❌ Usa /setgroup primero.")
+        chat_id = group
 
-    # Borrar lista anterior
+    # Borrar mensajes antiguos
     for msg_id in data["messages"].get(letra, []):
         try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-        except Exception:
+            await context.bot.delete_message(chat_id, msg_id)
+        except:
             pass
 
     data["messages"][letra] = []
 
-    # Enviar bloques
+    # Publicar bloques nuevos
     for block in blocks:
-        if not block:
-            continue
         text = fmt_block(block)
         msg = await context.bot.send_message(
-            chat_id=chat_id,
-            message_thread_id=topic_id,
-            text=text,
-            parse_mode=constants.ParseMode.HTML,
-            disable_web_page_preview=True,
+            chat_id, message_thread_id=topic_id, text=text,
+            parse_mode=constants.ParseMode.HTML, disable_web_page_preview=True
         )
         data["messages"][letra].append(msg.message_id)
 
-    # Botón final
-    btn_text = f'<a href="{INDEX_URL}">Volver al índice</a>'
+    # Botón índice
     msg = await context.bot.send_message(
-        chat_id=chat_id,
-        message_thread_id=topic_id,
-        text=btn_text,
+        chat_id, message_thread_id=topic_id,
+        text=f'<a href="{INDEX_URL}">Volver al índice</a>',
         parse_mode=constants.ParseMode.HTML,
-        disable_web_page_preview=True,
     )
     data["messages"][letra].append(msg.message_id)
 
     save_data(data)
 
 
+# ---------------- IMPORTACIÓN ----------------
+
 async def importar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    if not message:
-        return
-
     if not is_owner(update):
-        await message.reply_text("❌ No tienes permiso para usar este comando.")
-        return
-
+        return await update.message.reply_text("❌ No autorizado.")
     if len(context.args) != 1:
-        await message.reply_text("Uso: /importar A")
-        return
-
+        return await update.message.reply_text("Uso: /importar A")
     letra = context.args[0].upper()
     context.user_data["import_letter"] = letra
     context.user_data["import_buffer"] = []
-    await message.reply_text(
-        f"Modo importación para la letra {letra}.\n\n"
-        "Copia TODO el listado de esa letra y pégalo aquí (pueden ser varios mensajes).\n"
-        "Cuando termines, usa /finalizar."
+    await update.message.reply_text(
+        f"Modo importación para {letra}. Pegue el listado y luego /finalizar"
     )
 
 
@@ -563,9 +423,8 @@ async def recv_import(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if not is_owner(update):
         return
-    if not update.message or not update.message.text:
+    if not update.message.text:
         return
-
     context.user_data["import_buffer"].append(update.message.text)
 
 
@@ -573,49 +432,33 @@ def parse_line(line: str):
     m = PIXEL_URL_RE.search(line)
     if not m:
         return None
-
-    url = m.group(0).strip()
-    title_part = line[: m.start()].rstrip()
-    if title_part.endswith("("):
-        title_part = title_part[:-1].rstrip()
-
-    if not title_part:
-        return None
-
-    title = title_part
+    url = m.group(0)
+    title = line[: m.start()].strip()
     return {"title": title, "url": url}
 
 
 async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    if not message:
-        return
-
     if not is_owner(update):
-        await message.reply_text("❌ No tienes permiso para usar este comando.")
-        return
-
+        return await update.message.reply_text("❌ No autorizado.")
     if "import_letter" not in context.user_data:
-        await message.reply_text("No estás importando nada. Usa /importar A primero.")
-        return
+        return await update.message.reply_text("No estás importando nada.")
 
     letra = context.user_data["import_letter"]
-    buffer = context.user_data.get("import_buffer", [])
+    buffer = context.user_data["import_buffer"]
 
     data = load_data()
     data["entries"].setdefault(letra, [])
 
     total = 0
     for msg in buffer:
-        for raw_line in msg.splitlines():
-            line = raw_line.strip()
+        for line in msg.splitlines():
+            line = line.strip()
             if not line:
                 continue
-            parsed = parse_line(line)
-            if not parsed:
-                continue
-            data["entries"][letra].append(parsed)
-            total += 1
+            p = parse_line(line)
+            if p:
+                data["entries"][letra].append(p)
+                total += 1
 
     dedup = {}
     for e in data["entries"][letra]:
@@ -627,10 +470,7 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data.clear()
 
-    await message.reply_text(
-        f"Importación completada para la letra {letra}. {total} entradas añadidas.\n"
-        "Reconstruyendo…"
-    )
+    await update.message.reply_text(f"Importados {total} elementos.\nReconstruyendo…")
     await rebuild_topic(update, context, letra)
 
 
@@ -639,7 +479,7 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     token = os.environ.get("BOT_TOKEN")
     if not token:
-        raise RuntimeError("Falta la variable de entorno BOT_TOKEN.")
+        raise RuntimeError("Falta BOT_TOKEN")
 
     app = ApplicationBuilder().token(token).build()
 

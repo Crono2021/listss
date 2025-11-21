@@ -34,6 +34,7 @@ PIXEL_URL_RE = re.compile(
 # ---------------- UTILIDADES ----------------
 
 def normalize(s: str) -> str:
+    """Normaliza texto para orden alfabético (quita acentos y pasa a minúsculas)."""
     nf = unicodedata.normalize("NFD", s)
     sin_acentos = "".join(c for c in nf if unicodedata.category(c) != "Mn")
     return sin_acentos.lower()
@@ -61,7 +62,7 @@ def load_data():
             "fichas_group_id": None,
             "fichas_topic_id": None,
         }
-
+    # Añadir claves nuevas si faltan
     if "owner_group_id" not in data:
         data["owner_group_id"] = None
     if "fichas_group_id" not in data:
@@ -82,6 +83,7 @@ def split_blocks(entries):
 
 
 def fmt_block(block):
+    """Devuelve un bloque de texto con cada título como enlace HTML clicable."""
     return "\n".join(f'<a href="{e["url"]}">{html.escape(e["title"])}</a>' for e in block)
 
 
@@ -98,6 +100,7 @@ def get_tmdb_info(title: str, year: str | None):
         return None
 
     try:
+        # Buscar película
         params = {
             "api_key": api_key,
             "language": "es-ES",
@@ -122,6 +125,7 @@ def get_tmdb_info(title: str, year: str | None):
         if not movie_id:
             return None
 
+        # Detalles de la película
         r2 = requests.get(
             f"https://api.themoviedb.org/3/movie/{movie_id}",
             params={"api_key": api_key, "language": "es-ES"},
@@ -155,6 +159,7 @@ def get_tmdb_info(title: str, year: str | None):
 
 
 async def create_ficha_for_movie(title: str, url: str, context: ContextTypes.DEFAULT_TYPE):
+    """Crea ficha en el grupo/tema configurado con /setfichas."""
     data = load_data()
     fichas_group_id = data.get("fichas_group_id")
     fichas_topic_id = data.get("fichas_topic_id")
@@ -162,11 +167,13 @@ async def create_ficha_for_movie(title: str, url: str, context: ContextTypes.DEF
     if not fichas_group_id or not fichas_topic_id:
         return
 
+    # Extraer año
     year = None
     m = re.search(r"\((\d{4})\)", title)
     if m:
         year = m.group(1)
 
+    # Título para búsqueda TMDB
     title_for_tmdb = re.sub(r"\(\d{4}\)", "", title).strip()
 
     tmdb = get_tmdb_info(title_for_tmdb, year)
@@ -183,6 +190,7 @@ async def create_ficha_for_movie(title: str, url: str, context: ContextTypes.DEF
         vote = None
         poster_url = None
 
+    # Construcción de ficha
     lines = []
     lines.append(html.escape(title))
     lines.append("")
@@ -302,9 +310,9 @@ async def settopic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await message.reply_text(f"Tema asociado a la letra {letra} correctamente.")
 
 
-# ----------------
-# BORRADO MEJORADO
-# ----------------
+# -------------------------------
+# MEJORA EXCLUSIVA PARA /delete
+# -------------------------------
 
 async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -324,6 +332,7 @@ async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     coincidencias = []
 
+    # Buscar coincidencias parciales
     for letra, lista in data["entries"].items():
         for e in lista:
             if query in e["title"].lower():
@@ -337,7 +346,6 @@ async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
         letra, entry = coincidencias[0]
         data["entries"][letra].remove(entry)
         save_data(data)
-
         await message.reply_text(f"✔ Eliminado: {entry['title']}\nReconstruyendo…")
         await rebuild_topic(update, context, letra)
         return
@@ -345,10 +353,12 @@ async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     botones = []
     for letra, entry in coincidencias:
         key = f"{letra}|||{entry['title']}|||{entry['url']}"
-        botones.append([InlineKeyboardButton(entry["title"], callback_data=f"del:{key}")])
+        botones.append([
+            InlineKeyboardButton(entry["title"], callback_data=f"del:{key}")
+        ])
 
     await message.reply_text(
-        "🎯 Se encontraron varias coincidencias, elige cuál eliminar:",
+        "🎯 Varias coincidencias encontradas.\nElige cuál eliminar:",
         reply_markup=InlineKeyboardMarkup(botones)
     )
 
@@ -378,11 +388,52 @@ async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text(f"✔ Eliminado: {title}\nReconstruyendo…")
 
-    fake_update = Update(update.update_id, message=None)
     await rebuild_topic(query, context, letra)
 
 
-# ---------------- CONTINUACIÓN DEL CÓDIGO ORIGINAL ----------------
+# ---------------- EL RESTO SIGUE IDENTICO ----------------
+
+async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    if not message:
+        return
+
+    if not is_owner(update):
+        await message.reply_text("❌ No tienes permiso para usar este comando.")
+        return
+
+    if len(context.args) < 2:
+        await message.reply_text("Uso: /add TÍTULO (AÑO) URL")
+        return
+
+    url = context.args[-1]
+    title = " ".join(context.args[:-1]).strip()
+    if not title:
+        await message.reply_text("El título no puede estar vacío.")
+        return
+
+    first = title[0].upper()
+    letra = first if "A" <= first <= "Z" else "#"
+
+    data = load_data()
+    data["entries"].setdefault(letra, [])
+    data["messages"].setdefault(letra, [])
+
+    new_norm = normalize(title)
+    for e in data["entries"][letra]:
+        if normalize(e["title"]) == new_norm:
+            await message.reply_text("⚠️ Esa película ya existe en esa letra.")
+            return
+
+    data["entries"][letra].append({"title": title, "url": url})
+    data["entries"][letra].sort(key=lambda x: normalize(x["title"]))
+    save_data(data)
+
+    await rebuild_topic(update, context, letra)
+    await create_ficha_for_movie(title, url, context)
+
+    await message.reply_text(f"Añadido en la letra {letra}.")
+
 
 async def rebuild(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message

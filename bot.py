@@ -34,7 +34,6 @@ PIXEL_URL_RE = re.compile(
 # ---------------- UTILIDADES ----------------
 
 def normalize(s: str) -> str:
-    """Normaliza texto para orden alfabético (quita acentos y pasa a minúsculas)."""
     nf = unicodedata.normalize("NFD", s)
     sin_acentos = "".join(c for c in nf if unicodedata.category(c) != "Mn")
     return sin_acentos.lower()
@@ -83,7 +82,6 @@ def split_blocks(entries):
 
 
 def fmt_block(block):
-    """Devuelve un bloque de texto con cada título como enlace HTML clicable."""
     return "\n".join(f'<a href="{e["url"]}">{html.escape(e["title"])}</a>' for e in block)
 
 
@@ -100,7 +98,6 @@ def get_tmdb_info(title: str, year: str | None):
         return None
 
     try:
-        # Buscar película
         params = {
             "api_key": api_key,
             "language": "es-ES",
@@ -125,7 +122,6 @@ def get_tmdb_info(title: str, year: str | None):
         if not movie_id:
             return None
 
-        # Detalles de la película
         r2 = requests.get(
             f"https://api.themoviedb.org/3/movie/{movie_id}",
             params={"api_key": api_key, "language": "es-ES"},
@@ -159,7 +155,6 @@ def get_tmdb_info(title: str, year: str | None):
 
 
 async def create_ficha_for_movie(title: str, url: str, context: ContextTypes.DEFAULT_TYPE):
-    """Crea ficha en el grupo/tema configurado con /setfichas."""
     data = load_data()
     fichas_group_id = data.get("fichas_group_id")
     fichas_topic_id = data.get("fichas_topic_id")
@@ -167,13 +162,11 @@ async def create_ficha_for_movie(title: str, url: str, context: ContextTypes.DEF
     if not fichas_group_id or not fichas_topic_id:
         return
 
-    # Extraer año
     year = None
     m = re.search(r"\((\d{4})\)", title)
     if m:
         year = m.group(1)
 
-    # Título para búsqueda TMDB
     title_for_tmdb = re.sub(r"\(\d{4}\)", "", title).strip()
 
     tmdb = get_tmdb_info(title_for_tmdb, year)
@@ -190,7 +183,6 @@ async def create_ficha_for_movie(title: str, url: str, context: ContextTypes.DEF
         vote = None
         poster_url = None
 
-    # Construcción de ficha
     lines = []
     lines.append(html.escape(title))
     lines.append("")
@@ -310,9 +302,9 @@ async def settopic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await message.reply_text(f"Tema asociado a la letra {letra} correctamente.")
 
 
-# -------------------------------
-# MEJORA EXCLUSIVA PARA /delete
-# -------------------------------
+# ----------------------------------------------------
+#   DELETE MEJORADO (compatible con Telegram 64 bytes)
+# ----------------------------------------------------
 
 async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -328,11 +320,10 @@ async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     query = " ".join(context.args).strip().lower()
-
     data = load_data()
+
     coincidencias = []
 
-    # Buscar coincidencias parciales
     for letra, lista in data["entries"].items():
         for e in lista:
             if query in e["title"].lower():
@@ -341,6 +332,8 @@ async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not coincidencias:
         await message.reply_text("❌ No se encontraron coincidencias.")
         return
+
+    context.user_data["delete_matches"] = coincidencias
 
     if len(coincidencias) == 1:
         letra, entry = coincidencias[0]
@@ -351,14 +344,13 @@ async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     botones = []
-    for letra, entry in coincidencias:
-        key = f"{letra}|||{entry['title']}|||{entry['url']}"
+    for idx, (letra, entry) in enumerate(coincidencias):
         botones.append([
-            InlineKeyboardButton(entry["title"], callback_data=f"del:{key}")
+            InlineKeyboardButton(entry["title"], callback_data=f"del:{idx}")
         ])
 
     await message.reply_text(
-        "🎯 Varias coincidencias encontradas.\nElige cuál eliminar:",
+        "🎯 Varias coincidencias encontradas. Selecciona cuál eliminar:",
         reply_markup=InlineKeyboardMarkup(botones)
     )
 
@@ -371,27 +363,29 @@ async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ No tienes permiso para eliminar.")
         return
 
-    data_str = query.data.replace("del:", "")
-    letra, title, url = data_str.split("|||")
+    idx = int(query.data.replace("del:", ""))
+
+    matches = context.user_data.get("delete_matches")
+    if not matches or idx >= len(matches):
+        await query.edit_message_text("❌ No se encontró la coincidencia seleccionada.")
+        return
+
+    letra, entry = matches[idx]
 
     data = load_data()
     lista = data["entries"].get(letra, [])
 
-    entry = next((e for e in lista if e["title"] == title and e["url"] == url), None)
-
-    if not entry:
-        await query.edit_message_text("❌ Ese elemento ya no existe.")
-        return
-
-    lista.remove(entry)
+    lista[:] = [e for e in lista if not (e["title"] == entry["title"] and e["url"] == entry["url"])]
     save_data(data)
 
-    await query.edit_message_text(f"✔ Eliminado: {title}\nReconstruyendo…")
+    await query.edit_message_text(f"✔ Eliminado: {entry['title']}\nReconstruyendo…")
+
+    context.user_data.pop("delete_matches", None)
 
     await rebuild_topic(query, context, letra)
 
 
-# ---------------- EL RESTO SIGUE IDENTICO ----------------
+# ---------------- RESTO DEL CÓDIGO ORIGINAL ----------------
 
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message

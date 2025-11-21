@@ -272,7 +272,7 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ----------------------------------------------------
-# DELETE SIN CONFIRMACION (Funciona 100%)
+# DELETE SIN CONFIRMACIÓN (Funciona 100%)
 # ----------------------------------------------------
 
 async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -319,11 +319,15 @@ async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if not is_owner(query):
+    # CORREGIDO: usar update, NO query
+    if not is_owner(update):
         return await query.edit_message_text("❌ No autorizado.")
 
-    _, letra, idx = query.data.split(":")
-    idx = int(idx)
+    try:
+        _, letra, idx = query.data.split(":")
+        idx = int(idx)
+    except:
+        return await query.edit_message_text("❌ Selección inválida.")
 
     data = load_data()
     lista = data["entries"].get(letra, [])
@@ -374,7 +378,6 @@ async def rebuild_topic(update: Update, context: ContextTypes.DEFAULT_TYPE, letr
             return await update.message.reply_text("❌ Usa /setgroup primero.")
         chat_id = group
 
-    # Borrar mensajes antiguos
     for msg_id in data["messages"].get(letra, []):
         try:
             await context.bot.delete_message(chat_id, msg_id)
@@ -383,7 +386,6 @@ async def rebuild_topic(update: Update, context: ContextTypes.DEFAULT_TYPE, letr
 
     data["messages"][letra] = []
 
-    # Publicar bloques nuevos
     for block in blocks:
         text = fmt_block(block)
         msg = await context.bot.send_message(
@@ -392,7 +394,6 @@ async def rebuild_topic(update: Update, context: ContextTypes.DEFAULT_TYPE, letr
         )
         data["messages"][letra].append(msg.message_id)
 
-    # Botón índice
     msg = await context.bot.send_message(
         chat_id, message_thread_id=topic_id,
         text=f'<a href="{INDEX_URL}">Volver al índice</a>',
